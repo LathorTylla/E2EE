@@ -31,5 +31,11 @@
     <ClInclude Include="Include\Prerequisites.h">
       <Filter>Include</Filter>
     </ClInclude>
+    <ClInclude Include="Include\CryptoHelper.h">
+      <Filter>Include</Filter>
+    </ClInclude>
+    <ClInclude Include="Include\Server.h">
+      <Filter>Include</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

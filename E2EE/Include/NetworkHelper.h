@@ -5,7 +5,7 @@
 #pragma comment(lib, "Ws2_32.lib")
 
 class
-	NetworkHelper {
+NetworkHelper {
 public:
 	NetworkHelper();
 	~NetworkHelper();
@@ -18,7 +18,7 @@ public:
  * @return false Si ocurre un error en cualquier paso.
  */
 	bool
-		StartServer(int port);
+	StartServer(int port);
 
 	/**
 	 * @brief Espera y acepta un cliente entrante.
@@ -26,7 +26,7 @@ public:
 	 * @return SOCKET Socket del cliente aceptado, o INVALID_SOCKET si falla.
 	 */
 	SOCKET
-		AcceptClient();
+	AcceptClient();
 
 	// Modo cliente
 	/**
