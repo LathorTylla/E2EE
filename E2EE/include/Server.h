@@ -1,5 +1,6 @@
 #pragma once
 #include "NetworkHelper.h"
+#include "CryptoHelper.h"
 
 class
 	Server {
