@@ -4,36 +4,36 @@
 #include "openssl\aes.h"
 
 class
- CryptoHelper {
+CryptoHelper {
 public:
  CryptoHelper();
-  ~CryptoHelper();
+ ~CryptoHelper();
 
   // RSA
   void
-    GenerateRSAKeys();
+  GenerateRSAKeys();
 
   std::string
-    GetPublicKeyString() const;
+  GetPublicKeyString() const;
 
   void
-    LoadPeerPublicKey(const std::string& pemKey);
+  LoadPeerPublicKey(const std::string& pemKey);
 
   // AES
   void
-    GenerateAESKey();
+  GenerateAESKey();
 
   std::vector<unsigned char>
-    EncryptAESKeyWithPeer();
+  EncryptAESKeyWithPeer();
 
   void
-    DecryptAESKey(const std::vector<unsigned char>& encryptedKey);
+  DecryptAESKey(const std::vector<unsigned char>& encryptedKey);
 
   std::vector<unsigned char>
-    AESEncrypt(const std::string& plaintext, std::vector<unsigned char>& outIV);
+  AESEncrypt(const std::string& plaintext, std::vector<unsigned char>& outIV);
 
   std::string
-    AESDecrypt(const std::vector<unsigned char>& ciphertext,
+  AESDecrypt(const std::vector<unsigned char>& ciphertext,
       const std::vector<unsigned char>& iv);
 
 private:
