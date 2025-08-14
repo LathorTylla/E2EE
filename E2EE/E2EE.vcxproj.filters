@@ -20,5 +20,22 @@
     <ClCompile Include="src\E2EE.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\NetworkHelper.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\CryptoHelper.h">
+      <Filter>Include</Filter>
+    </ClInclude>
+    <ClInclude Include="include\NetworkHelper.h">
+      <Filter>Include</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Prerequisites.h">
+      <Filter>Include</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Server.h">
+      <Filter>Include</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
