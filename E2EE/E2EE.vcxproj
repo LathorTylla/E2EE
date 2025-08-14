@@ -19,10 +19,14 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="src\Client.cpp" />
+    <ClCompile Include="src\CryptoHelper.cpp" />
     <ClCompile Include="src\E2EE.cpp" />
     <ClCompile Include="src\NetworkHelper.cpp" />
+    <ClCompile Include="src\Server.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="include\Client.h" />
     <ClInclude Include="include\CryptoHelper.h" />
     <ClInclude Include="include\NetworkHelper.h" />
     <ClInclude Include="include\Prerequisites.h" />

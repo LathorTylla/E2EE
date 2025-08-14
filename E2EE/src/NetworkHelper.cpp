@@ -100,10 +100,12 @@ NetworkHelper::SendData(SOCKET socket, const std::string& data) {
 
 bool
 NetworkHelper::SendData(SOCKET socket, const std::vector<unsigned char>& data) {
-  return send(socket,
-    reinterpret_cast<const char*>(data.data()),
-    static_cast<int>(data.size()), 0) != SOCKET_ERROR;
+  return SendAll(socket,
+                 data.data(),
+                 static_cast<int>(data.size()));
 }
+
+
 
 std::string
 NetworkHelper::ReceiveData(SOCKET socket) {
@@ -115,12 +117,38 @@ NetworkHelper::ReceiveData(SOCKET socket) {
 
 std::vector<unsigned char>
 NetworkHelper::ReceiveDataBinary(SOCKET socket, int size) {
-  std::vector<unsigned char> buffer(size);
-  int len = recv(socket, reinterpret_cast<char*>(buffer.data()), size, 0);
-  return buffer;
+  std::vector<unsigned char> buf(size);
+  if (!ReceiveExact(socket, buf.data(), size)) return {};
+  return buf;
 }
 
 void
 NetworkHelper::close(SOCKET socket) {
   closesocket(socket);
+}
+
+bool
+NetworkHelper::SendAll(SOCKET s, 
+                       const unsigned char* data, 
+                       int len) {
+  int sent = 0;
+  while (sent < len) {
+    int n = send(s, (const char*)data + sent, len - sent, 0);
+    if (n == SOCKET_ERROR) return false;
+    sent += n;
+  }
+  return true;
+}
+
+bool
+NetworkHelper::ReceiveExact(SOCKET s, 
+                            unsigned char* out, 
+                            int len) {
+  int recvd = 0;
+  while (recvd < len) {
+    int n = recv(s, (char*)out + recvd, len - recvd, 0);
+    if (n <= 0) return false;
+    recvd += n;
+  }
+  return true;
 }

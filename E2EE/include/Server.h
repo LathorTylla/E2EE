@@ -20,11 +20,19 @@ public:
 	void
 	ReceiveEncryptedMessage();
 
+	void
+	StartReceiveLoop();
+
+	void
+	SendEncryptedMessageLoop();
+
 private:
 
 	int m_port;
 	SOCKET m_clientSock;
 	NetworkHelper m_net;
 	CryptoHelper m_crypto;
+	std::thread m_rxThread;
+	std::atomic<bool> m_running{ false };
 
 };
