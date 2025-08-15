@@ -1,5 +1,7 @@
 #include "NetworkHelper.h"
 
+// Constructor initializes Windows Sockets (Winsock)
+// Required for all network operations on Windows
 NetworkHelper::NetworkHelper() : m_serverSocket(INVALID_SOCKET), m_initialized(false) {
   WSADATA wsaData;
   int result = WSAStartup(MAKEWORD(2, 2), &wsaData);
@@ -11,6 +13,7 @@ NetworkHelper::NetworkHelper() : m_serverSocket(INVALID_SOCKET), m_initialized(f
   }
 }
 
+// Destructor cleans up sockets and Winsock resources
 NetworkHelper::~NetworkHelper() {
   if (m_serverSocket != INVALID_SOCKET) {
     closesocket(m_serverSocket);
@@ -21,22 +24,24 @@ NetworkHelper::~NetworkHelper() {
   }
 }
 
+// Creates a TCP server socket, binds it to the specified port,
+// and starts listening for incoming connections
 bool
 NetworkHelper::StartServer(int port) {
-  // Crea el socket TCP
+  // Create TCP socket
   m_serverSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
   if (m_serverSocket == INVALID_SOCKET) {
     std::cerr << "Error creating socket: " << WSAGetLastError() << std::endl;
     return false;
   }
 
-  // Configura la dirección del servidor (IPv4, cualquier IP local, puerto dado)
+  // Configure server address (IPv4, any local IP, given port)
   sockaddr_in serverAddress{};
   serverAddress.sin_family = AF_INET;
   serverAddress.sin_port = htons(port);
   serverAddress.sin_addr.s_addr = INADDR_ANY;
 
-  // Asocia el socket a la dirección y puerto
+  // Bind socket to address and port
   if (bind(m_serverSocket, (sockaddr*)&serverAddress, sizeof(serverAddress)) == SOCKET_ERROR) {
     std::cerr << "Error binding socket: " << WSAGetLastError() << std::endl;
     closesocket(m_serverSocket);
@@ -44,7 +49,7 @@ NetworkHelper::StartServer(int port) {
     return false;
   }
 
-  // Escucha conexiones entrantes
+  // Listen for incoming connections
   if (listen(m_serverSocket, SOMAXCONN) == SOCKET_ERROR) {
     std::cerr << "Error listening on socket: " << WSAGetLastError() << std::endl;
     closesocket(m_serverSocket);
@@ -56,6 +61,8 @@ NetworkHelper::StartServer(int port) {
   return true;
 }
 
+// Accepts an incoming client connection
+// Blocks until a client connects
 SOCKET
 NetworkHelper::AcceptClient() {
   SOCKET clientSocket = accept(m_serverSocket, nullptr, nullptr);
@@ -67,22 +74,23 @@ NetworkHelper::AcceptClient() {
   return clientSocket;
 }
 
+// Connects to a remote server at the specified IP and port
 bool
 NetworkHelper::ConnectToServer(const std::string& ip, int port) {
-  // Crea el socket TCP
+  // Create TCP socket
   m_serverSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
   if (m_serverSocket == INVALID_SOCKET) {
     std::cerr << "Error creating socket: " << WSAGetLastError() << std::endl;
     return false;
   }
 
-  // Configura la dirección del servidor (IPv4, IP dada, puerto dado)
+  // Configure server address (IPv4, given IP, given port)
   sockaddr_in serverAddress{};
   serverAddress.sin_family = AF_INET;
   serverAddress.sin_port = htons(port);
   inet_pton(AF_INET, ip.c_str(), &serverAddress.sin_addr);
 
-  // Conecta al servidor
+  // Connect to server
   if (connect(m_serverSocket, (sockaddr*)&serverAddress, sizeof(serverAddress)) == SOCKET_ERROR) {
     std::cerr << "Error connecting to server: " << WSAGetLastError() << std::endl;
     closesocket(m_serverSocket);
@@ -93,11 +101,14 @@ NetworkHelper::ConnectToServer(const std::string& ip, int port) {
   return true;
 }
 
+// Sends string data over a socket
 bool
 NetworkHelper::SendData(SOCKET socket, const std::string& data) {
   return send(socket, data.c_str(), static_cast<int>(data.size()), 0) != SOCKET_ERROR;
 }
 
+// Sends binary data over a socket
+// Uses SendAll to ensure all data is sent
 bool
 NetworkHelper::SendData(SOCKET socket, const std::vector<unsigned char>& data) {
   return SendAll(socket,
@@ -105,8 +116,8 @@ NetworkHelper::SendData(SOCKET socket, const std::vector<unsigned char>& data) {
                  static_cast<int>(data.size()));
 }
 
-
-
+// Receives string data from a socket
+// Note: Limited to 4KB of data
 std::string
 NetworkHelper::ReceiveData(SOCKET socket) {
   char buffer[4096] = {};
@@ -115,6 +126,8 @@ NetworkHelper::ReceiveData(SOCKET socket) {
   return std::string(buffer, len);
 }
 
+// Receives binary data of known size from a socket
+// If size=0, returns empty vector on error
 std::vector<unsigned char>
 NetworkHelper::ReceiveDataBinary(SOCKET socket, int size) {
   std::vector<unsigned char> buf(size);
@@ -122,11 +135,14 @@ NetworkHelper::ReceiveDataBinary(SOCKET socket, int size) {
   return buf;
 }
 
+// Closes a socket connection
 void
 NetworkHelper::close(SOCKET socket) {
   closesocket(socket);
 }
 
+// Ensures all data is sent by handling partial sends
+// Continues sending until all bytes are transmitted
 bool
 NetworkHelper::SendAll(SOCKET s, 
                        const unsigned char* data, 
@@ -140,6 +156,8 @@ NetworkHelper::SendAll(SOCKET s,
   return true;
 }
 
+// Ensures exactly the requested number of bytes are received
+// Handles partial receives and continues until all data arrives
 bool
 NetworkHelper::ReceiveExact(SOCKET s, 
                             unsigned char* out, 
