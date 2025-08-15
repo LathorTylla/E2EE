@@ -124,3 +124,15 @@ Server::SendEncryptedMessageLoop() {
 	}
 	std::cout << "[Server] Saliendo del chat.\n";
 }
+
+void
+Server::StartChatLoop() {
+	std::thread recvThread([&]() {
+		StartReceiveLoop();
+		});
+
+	SendEncryptedMessageLoop();
+
+	if (recvThread.joinable())
+		recvThread.join();
+}

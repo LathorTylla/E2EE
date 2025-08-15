@@ -26,6 +26,9 @@ public:
 	void
 	SendEncryptedMessageLoop();
 
+	void
+	StartChatLoop();
+
 private:
 
 	int m_port;

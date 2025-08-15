@@ -28,6 +28,12 @@ public:
 	void 
 	SendEncryptedMessageLoop();
 
+	void
+	StartChatLoop();
+
+	void
+	StartReceiveLoop();     
+
 private:
 	std::string m_ip;
 	int m_port;

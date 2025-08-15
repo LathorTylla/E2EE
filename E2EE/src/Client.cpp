@@ -89,3 +89,49 @@ Client::SendEncryptedMessageLoop() {
 		m_net.SendData(m_serverSock, cipher);
 	}
 }
+
+void
+Client::StartReceiveLoop() {
+	while (true) {
+		// 1) IV (16 bytes)
+		auto iv = m_net.ReceiveDataBinary(m_serverSock, 16);
+		if (iv.empty()) {
+			std::cout << "\n[Client] Conexión cerrada por el servidor.\n";
+			break;
+		}
+
+		// 2) Tamaño (4 bytes, network/big-endian)
+		auto len4 = m_net.ReceiveDataBinary(m_serverSock, 4);
+		if (len4.size() != 4) {
+			std::cout << "[Client] Error al recibir tamaño.\n";
+			break;
+		}
+		uint32_t nlen = 0;
+		std::memcpy(&nlen, len4.data(), 4);
+		uint32_t clen = ntohl(nlen);
+
+		// 3) Ciphertext (clen bytes)
+		auto cipher = m_net.ReceiveDataBinary(m_serverSock, static_cast<int>(clen));
+		if (cipher.empty()) {
+			std::cout << "[Client] Error al recibir datos.\n";
+			break;
+		}
+
+		// 4) Descifrar y mostrar
+		std::string plain = m_crypto.AESDecrypt(cipher, iv);
+		std::cout << "\n[Servidor]: " << plain << "\nCliente: ";
+		std::cout.flush();
+	}
+	std::cout << "[Client] ReceiveLoop terminado.\n";
+}
+
+void Client::StartChatLoop() {
+	std::thread recvThread([&]() {
+		StartReceiveLoop();
+		});
+
+	SendEncryptedMessageLoop();
+
+	if (recvThread.joinable())
+		recvThread.join();
+}

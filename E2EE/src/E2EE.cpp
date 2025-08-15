@@ -6,9 +6,12 @@ static
 void 
 runServer(int port) {
   Server s(port);
-  if (!s.Start()) { std::cerr << " No se pudo iniciar.\n"; return; }
+  if (!s.Start()) {
+    std::cerr << "[Main] No se pudo iniciar el servidor.\n";
+    return;
+  }
   s.WaitForClient(); 
-  s.StartReceiveLoop();       
+  s.StartChatLoop(); 
 }
 
 static void runClient(const std::string& ip, int port) {
@@ -18,7 +21,7 @@ static void runClient(const std::string& ip, int port) {
   c.ExchangeKeys();          
   c.SendAESKeyEncrypted();  
 
-  c.SendEncryptedMessageLoop();
+  c.StartChatLoop();
 }
 
 int 
