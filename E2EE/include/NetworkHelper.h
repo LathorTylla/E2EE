@@ -20,6 +20,7 @@
 class
 NetworkHelper {
 public:
+	static constexpr uint32_t MaxFrameSize = 1024 * 1024;
 	/**
 	 * @brief Constructor - Initializes Winsock
 	 */
@@ -89,12 +90,26 @@ public:
 	std::vector<unsigned char>
 	ReceiveDataBinary(SOCKET socket, int size = 0);
 
+	bool
+	SendFrame(SOCKET socket, const std::vector<unsigned char>& data);
+
+	bool
+	SendFrame(SOCKET socket, const std::string& data);
+
+	bool
+	ReceiveFrame(SOCKET socket, std::vector<unsigned char>& data,
+		uint32_t maxSize = MaxFrameSize);
+
+	bool
+	ReceiveFrame(SOCKET socket, std::string& data,
+		uint32_t maxSize = MaxFrameSize);
+
 	/**
 	 * @brief Closes a socket connection
 	 * @param socket The socket to close
 	 */
 	void
-	close(SOCKET socket);
+	close(SOCKET& socket);
 
 	/**
 	 * @brief Ensures all data is sent over the socket
@@ -121,6 +136,6 @@ public:
 							int len);
 
 public:
-	SOCKET m_serverSocket = -1;  //< Socket handle for the server
+	SOCKET m_serverSocket = INVALID_SOCKET;  //< Socket handle for the server
 	bool m_initialized;         //< Flag indicating if Winsock was initialized successfully
 };

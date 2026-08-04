@@ -1,0 +1,41 @@
+name: Windows build
+
+on:
+  push:
+    branches: [main, master, Test, test]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Prepare vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgJsonGlob: "**/vcpkg.json"
+          runVcpkgInstall: true
+
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v3
+        with:
+          msbuild-architecture: x64
+
+      - name: Build Release x64
+        run: >-
+          msbuild E2EE\E2EE.sln
+          /m /restore /t:Rebuild
+          /p:Configuration=Release
+          /p:Platform=x64
+          /p:VcpkgRoot="${{ github.workspace }}/vcpkg/"
+          /v:minimal
+
+      - name: Run automated tests
+        run: .\E2EE\bin\x64\E2EE.Tests.exe

@@ -21,6 +21,9 @@
 class
 Server {
 public:
+	using MessageHandler = std::function<void(const std::string&)>;
+	using StatusHandler = std::function<void(const std::string&)>;
+	using TypingHandler = std::function<void(bool)>;
 	/**
 	 * @brief Default constructor
 	 */
@@ -50,7 +53,7 @@ public:
 	 * This method blocks until a client connects, then performs
 	 * the initial handshake and cryptographic key exchange.
 	 */
-	void
+	bool
   WaitForClient();
 
 	/**
@@ -61,6 +64,32 @@ public:
 	 */
 	void
 	ReceiveEncryptedMessage();
+
+	bool
+	SendEncryptedMessage(const std::string& message);
+
+	bool SendTypingNotification(bool typing);
+
+	bool
+	StartReceiving();
+
+	void
+	Disconnect();
+
+	bool
+	IsConnected() const;
+
+	void
+	SetMessageHandler(MessageHandler handler);
+
+	void
+	SetStatusHandler(StatusHandler handler);
+
+	void SetTypingHandler(TypingHandler handler);
+
+	void SetDisplayName(const std::string& name);
+	const std::string& GetPeerName() const;
+	const std::string& GetSessionSafetyNumber() const;
 
 	/**
 	 * @brief Starts a continuous loop for receiving encrypted messages
@@ -90,10 +119,18 @@ public:
 	StartChatLoop();
 
 private:
-	int m_port;                         ///< Port number to listen on
-	SOCKET m_clientSock;                ///< Socket for the connected client
+	int m_port{ 0 };                    ///< Port number to listen on
+	SOCKET m_clientSock{ INVALID_SOCKET }; ///< Socket for the connected client
 	NetworkHelper m_net;                ///< Helper for network operations
 	CryptoHelper m_crypto;              ///< Helper for cryptographic operations
 	std::thread m_rxThread;             ///< Thread for receiving messages
 	std::atomic<bool> m_running{ false }; ///< Flag indicating if the server is running
+	MessageHandler m_messageHandler;
+	StatusHandler m_statusHandler;
+	TypingHandler m_typingHandler;
+	std::string m_displayName{ "Servidor" };
+	std::string m_peerName{ "Cliente" };
+	std::string m_safetyNumber;
+
+	void NotifyStatus(const std::string& status) const;
 };

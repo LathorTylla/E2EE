@@ -1,162 +1,262 @@
 #include "CryptoHelper.h"
-#include "openssl/pem.h"
-#include "openssl/rand.h"
-#include "openssl/err.h"
-#include "openssl/evp.h"
 
-// Constructor initializes RSA key pointers to nullptr and zeroes the AES key
-CryptoHelper::CryptoHelper() :rsaKeyPair(nullptr), 
-															peerPublicKey(nullptr) {
-	std::memset(&aesKey, 0, sizeof(aesKey));
+#include <openssl/err.h>
+#include <openssl/pem.h>
+#include <openssl/rand.h>
+#include <openssl/rsa.h>
+#include <openssl/sha.h>
+
+#include <algorithm>
+#include <iomanip>
+#include <memory>
+#include <sstream>
+
+namespace {
+constexpr unsigned char kMessageAad[] = "E2EE-MSG-v2";
+
+std::string OpenSSLError(const char* operation) {
+  const unsigned long code = ERR_get_error();
+  char detail[256]{};
+  if (code != 0) ERR_error_string_n(code, detail, sizeof(detail));
+  return std::string(operation) + (code ? ": " + std::string(detail) : " failed");
+}
 }
 
-// Destructor frees RSA key structures to prevent memory leaks
+CryptoHelper::CryptoHelper() = default;
+
 CryptoHelper::~CryptoHelper() {
-	if (rsaKeyPair) {
-		RSA_free(rsaKeyPair);	
-	}
-	if (peerPublicKey) {
-		RSA_free(peerPublicKey);
-	}
+  EVP_PKEY_free(m_keyPair);
+  EVP_PKEY_free(m_peerPublicKey);
+  OPENSSL_cleanse(m_aesKey, sizeof(m_aesKey));
 }
 
-// Generates a new 2048-bit RSA key pair for asymmetric encryption
-void
-CryptoHelper::GenerateRSAKeys() {
-	BIGNUM* bn = BN_new();
-	BN_set_word(bn, RSA_F4); // RSA_F4 is the exponent value 65537
-	rsaKeyPair = RSA_new();
-	RSA_generate_key_ex(rsaKeyPair, 2048, bn, nullptr);
-	BN_free(bn);
+void CryptoHelper::Require(bool result, const char* operation) {
+  if (!result) throw std::runtime_error(OpenSSLError(operation));
 }
 
-// Exports the public key as a PEM-encoded string for sharing with peers
-std::string
-CryptoHelper::GetPublicKeyString() const {
-	BIO* bio = BIO_new(BIO_s_mem());
-	PEM_write_bio_RSAPublicKey(bio, rsaKeyPair);
-	char* buffer = nullptr; // KeyData
-	size_t length = BIO_get_mem_data(bio, &buffer);
-	std::string publicKey(buffer, length);
-	BIO_free(bio);
-	return publicKey;
+void CryptoHelper::GenerateRSAKeys() {
+  EVP_PKEY_CTX* rawContext = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr);
+  Require(rawContext != nullptr, "EVP_PKEY_CTX_new_id");
+  std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)>
+    context(rawContext, EVP_PKEY_CTX_free);
+  Require(EVP_PKEY_keygen_init(context.get()) == 1, "EVP_PKEY_keygen_init");
+  Require(EVP_PKEY_CTX_set_rsa_keygen_bits(context.get(), 3072) == 1,
+          "EVP_PKEY_CTX_set_rsa_keygen_bits");
+  EVP_PKEY* generated = nullptr;
+  Require(EVP_PKEY_keygen(context.get(), &generated) == 1, "EVP_PKEY_keygen");
+  EVP_PKEY_free(m_keyPair);
+  m_keyPair = generated;
 }
 
-// Imports a peer's public key from a PEM-encoded string
-void
-CryptoHelper::LoadPeerPublicKey(const std::string& pemKey) {
-	BIO* bio = BIO_new_mem_buf(pemKey.data(), static_cast<int>(pemKey.size()));
-	peerPublicKey = PEM_read_bio_RSAPublicKey(bio, nullptr, nullptr, nullptr);
-	BIO_free(bio);
-	if (!peerPublicKey) {
-		throw std::runtime_error("Failed to load peer public key: "
-			+ std::string(ERR_error_string(ERR_get_error(), nullptr)));
-	}
+std::string CryptoHelper::GetPublicKeyString() const {
+  Require(m_keyPair != nullptr, "public key not generated");
+  BIO* rawBio = BIO_new(BIO_s_mem());
+  Require(rawBio != nullptr, "BIO_new");
+  std::unique_ptr<BIO, decltype(&BIO_free)> bio(rawBio, BIO_free);
+  Require(PEM_write_bio_PUBKEY(bio.get(), m_keyPair) == 1,
+          "PEM_write_bio_PUBKEY");
+  char* buffer = nullptr;
+  const long length = BIO_get_mem_data(bio.get(), &buffer);
+  Require(length > 0 && buffer != nullptr, "BIO_get_mem_data");
+  return std::string(buffer, static_cast<size_t>(length));
 }
 
-// Generates a cryptographically secure random 256-bit AES key
-void
-CryptoHelper::GenerateAESKey() {
-	RAND_bytes(aesKey, sizeof(aesKey));
+void CryptoHelper::LoadPeerPublicKey(const std::string& pemKey) {
+  BIO* rawBio = BIO_new_mem_buf(pemKey.data(), static_cast<int>(pemKey.size()));
+  Require(rawBio != nullptr, "BIO_new_mem_buf");
+  std::unique_ptr<BIO, decltype(&BIO_free)> bio(rawBio, BIO_free);
+  EVP_PKEY* loaded = PEM_read_bio_PUBKEY(bio.get(), nullptr, nullptr, nullptr);
+  Require(loaded != nullptr, "PEM_read_bio_PUBKEY");
+  if (EVP_PKEY_base_id(loaded) != EVP_PKEY_RSA || EVP_PKEY_bits(loaded) < 3072) {
+    EVP_PKEY_free(loaded);
+    throw std::runtime_error("Peer key must be RSA with at least 3072 bits");
+  }
+  EVP_PKEY_free(m_peerPublicKey);
+  m_peerPublicKey = loaded;
 }
 
-// Encrypts the AES key with the peer's RSA public key for secure key exchange
+void CryptoHelper::GenerateAESKey() {
+  Require(RAND_priv_bytes(m_aesKey, sizeof(m_aesKey)) == 1, "RAND_priv_bytes");
+  m_hasAESKey = true;
+}
+
+std::vector<unsigned char> CryptoHelper::EncryptAESKeyWithPeer() const {
+  Require(m_peerPublicKey != nullptr, "peer public key not loaded");
+  Require(m_hasAESKey, "AES key not generated");
+  EVP_PKEY_CTX* rawContext = EVP_PKEY_CTX_new(m_peerPublicKey, nullptr);
+  Require(rawContext != nullptr, "EVP_PKEY_CTX_new");
+  std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)>
+    context(rawContext, EVP_PKEY_CTX_free);
+  Require(EVP_PKEY_encrypt_init(context.get()) == 1, "EVP_PKEY_encrypt_init");
+  Require(EVP_PKEY_CTX_set_rsa_padding(context.get(), RSA_PKCS1_OAEP_PADDING) == 1,
+          "set RSA OAEP padding");
+  Require(EVP_PKEY_CTX_set_rsa_oaep_md(context.get(), EVP_sha256()) == 1,
+          "set RSA OAEP digest");
+  Require(EVP_PKEY_CTX_set_rsa_mgf1_md(context.get(), EVP_sha256()) == 1,
+          "set RSA MGF1 digest");
+  size_t outputSize = 0;
+  Require(EVP_PKEY_encrypt(context.get(), nullptr, &outputSize,
+                           m_aesKey, sizeof(m_aesKey)) == 1,
+          "measure encrypted session key");
+  std::vector<unsigned char> encrypted(outputSize);
+  Require(EVP_PKEY_encrypt(context.get(), encrypted.data(), &outputSize,
+                           m_aesKey, sizeof(m_aesKey)) == 1,
+          "encrypt session key");
+  encrypted.resize(outputSize);
+  return encrypted;
+}
+
+void CryptoHelper::DecryptAESKey(const std::vector<unsigned char>& encryptedKey) {
+  Require(m_keyPair != nullptr, "private key not generated");
+  EVP_PKEY_CTX* rawContext = EVP_PKEY_CTX_new(m_keyPair, nullptr);
+  Require(rawContext != nullptr, "EVP_PKEY_CTX_new");
+  std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)>
+    context(rawContext, EVP_PKEY_CTX_free);
+  Require(EVP_PKEY_decrypt_init(context.get()) == 1, "EVP_PKEY_decrypt_init");
+  Require(EVP_PKEY_CTX_set_rsa_padding(context.get(), RSA_PKCS1_OAEP_PADDING) == 1,
+          "set RSA OAEP padding");
+  Require(EVP_PKEY_CTX_set_rsa_oaep_md(context.get(), EVP_sha256()) == 1,
+          "set RSA OAEP digest");
+  Require(EVP_PKEY_CTX_set_rsa_mgf1_md(context.get(), EVP_sha256()) == 1,
+          "set RSA MGF1 digest");
+  size_t outputSize = 0;
+  Require(EVP_PKEY_decrypt(context.get(), nullptr, &outputSize,
+                           encryptedKey.data(), encryptedKey.size()) == 1,
+          "measure decrypted session key");
+  std::vector<unsigned char> decrypted(outputSize);
+  Require(EVP_PKEY_decrypt(context.get(), decrypted.data(), &outputSize,
+                           encryptedKey.data(), encryptedKey.size()) == 1,
+          "decrypt session key");
+  Require(outputSize == sizeof(m_aesKey), "invalid AES session key length");
+  std::copy_n(decrypted.data(), sizeof(m_aesKey), m_aesKey);
+  OPENSSL_cleanse(decrypted.data(), decrypted.size());
+  m_hasAESKey = true;
+}
+
 std::vector<unsigned char>
-CryptoHelper::EncryptAESKeyWithPeer() {
-	if (!peerPublicKey) {
-		throw std::runtime_error("Peer public key is not loaded.");
-	}
-	std::vector<unsigned char> encryptedKey(256);
-	int result = RSA_public_encrypt(sizeof(aesKey),
-																	aesKey,
-																	encryptedKey.data(),
-																	peerPublicKey,
-																	RSA_PKCS1_OAEP_PADDING);
-	encryptedKey.resize(result);
+CryptoHelper::EncryptMessage(const std::string& plaintext) const {
+  Require(m_hasAESKey, "AES key not available");
+  Require(plaintext.size() <= INT_MAX, "message too large");
+  std::vector<unsigned char> nonce(GcmNonceSize);
+  Require(RAND_bytes(nonce.data(), static_cast<int>(nonce.size())) == 1,
+          "RAND_bytes");
+  EVP_CIPHER_CTX* rawContext = EVP_CIPHER_CTX_new();
+  Require(rawContext != nullptr, "EVP_CIPHER_CTX_new");
+  std::unique_ptr<EVP_CIPHER_CTX, decltype(&EVP_CIPHER_CTX_free)>
+    context(rawContext, EVP_CIPHER_CTX_free);
+  Require(EVP_EncryptInit_ex(context.get(), EVP_aes_256_gcm(), nullptr, nullptr, nullptr) == 1,
+          "EVP_EncryptInit_ex");
+  Require(EVP_CIPHER_CTX_ctrl(context.get(), EVP_CTRL_GCM_SET_IVLEN,
+                              static_cast<int>(nonce.size()), nullptr) == 1,
+          "set GCM nonce length");
+  Require(EVP_EncryptInit_ex(context.get(), nullptr, nullptr, m_aesKey, nonce.data()) == 1,
+          "initialize AES-256-GCM");
+  int ignored = 0;
+  Require(EVP_EncryptUpdate(context.get(), nullptr, &ignored, kMessageAad,
+                            static_cast<int>(sizeof(kMessageAad) - 1)) == 1,
+          "authenticate protocol header");
+  std::vector<unsigned char> ciphertext(plaintext.size());
+  int written = 0;
+  Require(EVP_EncryptUpdate(context.get(), ciphertext.data(), &written,
+    reinterpret_cast<const unsigned char*>(plaintext.data()),
+    static_cast<int>(plaintext.size())) == 1, "encrypt message");
+  int finalWritten = 0;
+  Require(EVP_EncryptFinal_ex(context.get(), ciphertext.data() + written,
+                              &finalWritten) == 1, "finalize GCM encryption");
+  ciphertext.resize(static_cast<size_t>(written + finalWritten));
+  std::vector<unsigned char> tag(GcmTagSize);
+  Require(EVP_CIPHER_CTX_ctrl(context.get(), EVP_CTRL_GCM_GET_TAG,
+                              static_cast<int>(tag.size()), tag.data()) == 1,
+          "read GCM authentication tag");
 
-	return encryptedKey;
+  std::vector<unsigned char> packet;
+  packet.reserve(1 + nonce.size() + tag.size() + ciphertext.size());
+  packet.push_back(MessageVersion);
+  packet.insert(packet.end(), nonce.begin(), nonce.end());
+  packet.insert(packet.end(), tag.begin(), tag.end());
+  packet.insert(packet.end(), ciphertext.begin(), ciphertext.end());
+  return packet;
 }
 
-// Decrypts an AES key using our private RSA key
-void
-CryptoHelper::DecryptAESKey(const std::vector<unsigned char>& encryptedKey) {
-	RSA_private_decrypt(encryptedKey.size(),
-											encryptedKey.data(),
-											aesKey,
-											rsaKeyPair,
-											RSA_PKCS1_OAEP_PADDING);
+bool CryptoHelper::DecryptMessage(const std::vector<unsigned char>& packet,
+                                  std::string& plaintext) const {
+  plaintext.clear();
+  if (!m_hasAESKey || packet.size() < 1 + GcmNonceSize + GcmTagSize ||
+      packet[0] != MessageVersion) return false;
+  const unsigned char* nonce = packet.data() + 1;
+  const unsigned char* tag = nonce + GcmNonceSize;
+  const unsigned char* ciphertext = tag + GcmTagSize;
+  const size_t ciphertextSize = packet.size() - 1 - GcmNonceSize - GcmTagSize;
+  if (ciphertextSize > INT_MAX) return false;
+
+  EVP_CIPHER_CTX* rawContext = EVP_CIPHER_CTX_new();
+  if (!rawContext) return false;
+  std::unique_ptr<EVP_CIPHER_CTX, decltype(&EVP_CIPHER_CTX_free)>
+    context(rawContext, EVP_CIPHER_CTX_free);
+  if (EVP_DecryptInit_ex(context.get(), EVP_aes_256_gcm(), nullptr, nullptr, nullptr) != 1 ||
+      EVP_CIPHER_CTX_ctrl(context.get(), EVP_CTRL_GCM_SET_IVLEN,
+                          static_cast<int>(GcmNonceSize), nullptr) != 1 ||
+      EVP_DecryptInit_ex(context.get(), nullptr, nullptr, m_aesKey, nonce) != 1) return false;
+  int ignored = 0;
+  if (EVP_DecryptUpdate(context.get(), nullptr, &ignored, kMessageAad,
+                        static_cast<int>(sizeof(kMessageAad) - 1)) != 1) return false;
+  std::vector<unsigned char> output(ciphertextSize + 1);
+  int written = 0;
+  if (EVP_DecryptUpdate(context.get(), output.data(), &written, ciphertext,
+                        static_cast<int>(ciphertextSize)) != 1) return false;
+  std::vector<unsigned char> mutableTag(tag, tag + GcmTagSize);
+  if (EVP_CIPHER_CTX_ctrl(context.get(), EVP_CTRL_GCM_SET_TAG,
+                          static_cast<int>(mutableTag.size()), mutableTag.data()) != 1) return false;
+  int finalWritten = 0;
+  if (EVP_DecryptFinal_ex(context.get(), output.data() + written, &finalWritten) != 1) {
+    return false;
+  }
+  output.resize(static_cast<size_t>(written + finalWritten));
+  plaintext.assign(reinterpret_cast<const char*>(output.data()), output.size());
+  return true;
 }
 
-// Encrypts a plaintext message using AES-256-CBC with a random IV
-// The IV is returned via the outIV parameter for transmission with the ciphertext
-std::vector<unsigned char>
-CryptoHelper::AESEncrypt(const std::string& plaintext,
-												 std::vector<unsigned char>& outIV) {
-	// Generate a random initialization vector (IV)
-	outIV.resize(AES_BLOCK_SIZE);
-	RAND_bytes(outIV.data(), AES_BLOCK_SIZE);
-
-	const EVP_CIPHER* cipher = EVP_aes_256_cbc();
-	EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
-
-	// Allocate enough space for the encrypted data including padding
-	std::vector<unsigned char> out(plaintext.size() + AES_BLOCK_SIZE); // +pad
-	int outlen1 = 0, outlen2 = 0;
-
-	// Initialize encryption context
-	EVP_EncryptInit_ex(ctx, 
-										 cipher, 
-										 nullptr, 
-									   aesKey, 
-										 outIV.data());
-
-	// Encrypt the data
-	EVP_EncryptUpdate(ctx,
-										out.data(), &outlen1,
-										reinterpret_cast<const unsigned char*>(plaintext.data()),
-										static_cast<int>(plaintext.size()));
-
-	// Finalize encryption and add padding
-	EVP_EncryptFinal_ex(ctx, out.data() + outlen1, &outlen2);
-
-	// Resize output to actual encrypted size
-	out.resize(outlen1 + outlen2);
-	EVP_CIPHER_CTX_free(ctx);
-	return out;
+std::vector<unsigned char> CryptoHelper::PublicKeyDer(EVP_PKEY* key) {
+  Require(key != nullptr, "public key not available");
+  const int length = i2d_PUBKEY(key, nullptr);
+  Require(length > 0, "i2d_PUBKEY");
+  std::vector<unsigned char> der(static_cast<size_t>(length));
+  unsigned char* output = der.data();
+  Require(i2d_PUBKEY(key, &output) == length, "i2d_PUBKEY");
+  return der;
 }
 
-// Decrypts AES-encrypted data using the provided IV
-std::string
-CryptoHelper::AESDecrypt(const std::vector<unsigned char>& ciphertext,
-												 const std::vector<unsigned char>& iv) {
-	const EVP_CIPHER* cipher = EVP_aes_256_cbc();
-	EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+std::string CryptoHelper::Fingerprint(const std::vector<unsigned char>& bytes,
+                                      size_t groups) {
+  unsigned char digest[SHA256_DIGEST_LENGTH]{};
+  SHA256(bytes.data(), bytes.size(), digest);
+  std::ostringstream result;
+  result << std::uppercase << std::hex << std::setfill('0');
+  groups = std::min(groups, static_cast<size_t>(SHA256_DIGEST_LENGTH));
+  for (size_t index = 0; index < groups; ++index) {
+    if (index) result << '-';
+    result << std::setw(2) << static_cast<unsigned int>(digest[index]);
+  }
+  return result.str();
+}
 
-	std::vector<unsigned char> out(ciphertext.size());
-	int outlen1 = 0, outlen2 = 0;
+std::string CryptoHelper::GetOwnKeyFingerprint() const {
+  return Fingerprint(PublicKeyDer(m_keyPair));
+}
 
-	// Initialize decryption context
-	EVP_DecryptInit_ex(ctx, 
-										 cipher, 
-										 nullptr, 
-										 aesKey, 
-										 iv.data());
+std::string CryptoHelper::GetPeerKeyFingerprint() const {
+  return Fingerprint(PublicKeyDer(m_peerPublicKey));
+}
 
-	// Decrypt the data
-	EVP_DecryptUpdate(ctx,
-									  out.data(), 
-										&outlen1,
-										ciphertext.data(),
-										static_cast<int>(ciphertext.size()));
-	
-	// Finalize decryption and verify padding
-	if (EVP_DecryptFinal_ex(ctx, out.data() + outlen1, &outlen2) != 1) {
-		EVP_CIPHER_CTX_free(ctx);
-		return {}; // Return empty string if decryption fails (incorrect padding/key/iv)
-	}
-
-	// Resize output to actual decrypted size and convert to string
-	out.resize(outlen1 + outlen2);
-	EVP_CIPHER_CTX_free(ctx);
-	return std::string(reinterpret_cast<char*>(out.data()), out.size());
+std::string CryptoHelper::GetSessionSafetyNumber() const {
+  Require(m_hasAESKey && m_keyPair && m_peerPublicKey, "session is not ready");
+  auto own = PublicKeyDer(m_keyPair);
+  auto peer = PublicKeyDer(m_peerPublicKey);
+  if (peer < own) std::swap(own, peer);
+  std::vector<unsigned char> transcript;
+  transcript.reserve(own.size() + peer.size() + sizeof(m_aesKey));
+  transcript.insert(transcript.end(), own.begin(), own.end());
+  transcript.insert(transcript.end(), peer.begin(), peer.end());
+  transcript.insert(transcript.end(), m_aesKey, m_aesKey + sizeof(m_aesKey));
+  return Fingerprint(transcript, 12);
 }

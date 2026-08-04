@@ -20,6 +20,9 @@
 class 
 Client {
 public:
+    using MessageHandler = std::function<void(const std::string&)>;
+    using StatusHandler = std::function<void(const std::string&)>;
+    using TypingHandler = std::function<void(bool)>;
     /**
      * @brief Default constructor
      */
@@ -50,7 +53,7 @@ public:
      * Generates RSA key pair, sends public key to server,
      * and receives server's public key.
      */
-    void
+    bool
     ExchangeKeys();
 
     /**
@@ -59,15 +62,41 @@ public:
      * Generates a new AES key, encrypts it with the server's
      * public key, and sends it to establish secure communication.
      */
-    void
+    bool
     SendAESKeyEncrypted();
 
     /**
      * @brief Sends an encrypted message to the server
      * @param message The plaintext message to encrypt and send
      */
-    void
+    bool
     SendEncryptedMessage(const std::string& message);
+
+    bool SendTypingNotification(bool typing);
+
+    bool
+    PerformHandshake();
+
+    bool
+    StartReceiving();
+
+    void
+    Disconnect();
+
+    bool
+    IsConnected() const;
+
+    void
+    SetMessageHandler(MessageHandler handler);
+
+    void
+    SetStatusHandler(StatusHandler handler);
+
+    void SetTypingHandler(TypingHandler handler);
+
+    void SetDisplayName(const std::string& name);
+    const std::string& GetPeerName() const;
+    const std::string& GetSessionSafetyNumber() const;
 
     /**
      * @brief Enters a loop for sending encrypted messages
@@ -98,8 +127,18 @@ public:
 
 private:
     std::string m_ip;        ///< Server IP address
-    int m_port;              ///< Server port number
-    SOCKET m_serverSock;     ///< Socket for server connection
+    int m_port{ 0 };         ///< Server port number
+    SOCKET m_serverSock{ INVALID_SOCKET }; ///< Socket for server connection
     NetworkHelper m_net;     ///< Helper for network operations
     CryptoHelper m_crypto;   ///< Helper for cryptographic operations
+    std::atomic<bool> m_running{ false };
+    std::thread m_rxThread;
+    MessageHandler m_messageHandler;
+    StatusHandler m_statusHandler;
+    TypingHandler m_typingHandler;
+    std::string m_displayName{ "Cliente" };
+    std::string m_peerName{ "Servidor" };
+    std::string m_safetyNumber;
+
+    void NotifyStatus(const std::string& status) const;
 };

@@ -3,6 +3,11 @@
 #include <vector>
 #include <iostream>
 #include <cstring>
+#include <cstdint>
+#include <climits>
+#include <atomic>
+#include <functional>
+#include <mutex>
 #define NOMINMAX
 #include <limits>
 #include <thread>

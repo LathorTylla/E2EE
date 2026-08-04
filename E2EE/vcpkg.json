@@ -1,0 +1,10 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "e2ee-chat",
+  "version-string": "0.2.0",
+  "description": "Encrypted desktop chat built with C++ and OpenSSL.",
+  "builtin-baseline": "cb2981c4e03d421fa03b9bb5044cd1986180e7e4",
+  "dependencies": [
+    "openssl"
+  ]
+}

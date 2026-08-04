@@ -1,5 +1,12 @@
 #include "Client.h"
 
+namespace {
+constexpr const char* kProtocolVersion = "E2EE/2";
+constexpr const char* kProfilePrefix = "PROFILE:";
+constexpr const char* kChatPrefix = "CHAT:";
+constexpr const char* kTypingPrefix = "TYPING:";
+}
+
 // Constructor initializes client with server connection info and generates cryptographic keys
 Client::Client(const std::string& ip, 
 							 int port)
@@ -12,9 +19,7 @@ Client::Client(const std::string& ip,
 
 // Destructor cleans up network resources
 Client::~Client() {
-	if (m_serverSock != INVALID_SOCKET) {
-		m_net.close(m_serverSock);
-	}
+	Disconnect();
 }
 
 // Establishes connection with the server using provided IP and port
@@ -24,7 +29,7 @@ Client::Connect() {
 	bool connected = m_net.ConnectToServer(m_ip, m_port);
 	if (connected) {
 		m_serverSock = m_net.m_serverSocket; // Store the socket once connected
-		std::cout << "[Client] Conexión establecida.\n";
+		std::cout << "[Client] ConexiÃ³n establecida.\n";
 	}
 	else {
 		std::cerr << "[Client] Error al conectar.\n";
@@ -32,52 +37,136 @@ Client::Connect() {
 	return connected;
 }
 
+bool
+Client::PerformHandshake() {
+	NotifyStatus("securing_session");
+	const bool ready = ExchangeKeys() && SendAESKeyEncrypted();
+	NotifyStatus(ready ? "secure" : "handshake_failed");
+	return ready;
+}
+
 // Key exchange protocol:
 // 1. Receive server's RSA public key
 // 2. Send client's RSA public key to server
-void
+bool
 Client::ExchangeKeys() {
+	std::string protocol;
+	if (!m_net.ReceiveFrame(m_serverSock, protocol, 32) || protocol != kProtocolVersion ||
+		!m_net.SendFrame(m_serverSock, std::string(kProtocolVersion))) {
+		std::cerr << "[Client] Version de protocolo incompatible.\n";
+		return false;
+	}
 	// 1. Receive the server's public key
-	std::string serverPubKey = m_net.ReceiveData(m_serverSock);
+	std::string serverPubKey;
+	if (!m_net.ReceiveFrame(m_serverSock, serverPubKey, 16 * 1024)) {
+		std::cerr << "[Client] No se pudo recibir la clave publica del servidor.\n";
+		return false;
+	}
 	m_crypto.LoadPeerPublicKey(serverPubKey);
-	std::cout << "[Client] Clave pública del servidor recibida.\n";
+	std::cout << "[Client] Clave pÃºblica del servidor recibida.\n";
 
 	// 2. Send the client's public key
 	std::string clientPubKey = m_crypto.GetPublicKeyString();
-	m_net.SendData(m_serverSock, clientPubKey);
-	std::cout << "[Client] Clave pública del cliente enviada.\n";
+	if (!m_net.SendFrame(m_serverSock, clientPubKey)) {
+		std::cerr << "[Client] No se pudo enviar la clave publica.\n";
+		return false;
+	}
+	std::cout << "[Client] Clave pÃºblica del cliente enviada.\n";
+	return true;
 }
 
 // Encrypt AES key with server's RSA public key and send it
 // This is a crucial security step - only the server can decrypt this key
-void
+bool
 Client::SendAESKeyEncrypted() {
 	std::vector<unsigned char> encryptedAES = m_crypto.EncryptAESKeyWithPeer();
-	m_net.SendData(m_serverSock, encryptedAES);
+	if (!m_net.SendFrame(m_serverSock, encryptedAES)) {
+		std::cerr << "[Client] No se pudo enviar la clave de sesion.\n";
+		return false;
+	}
+	const auto profile = m_crypto.EncryptMessage(std::string(kProfilePrefix) + m_displayName);
+	if (!m_net.SendFrame(m_serverSock, profile)) return false;
+	std::vector<unsigned char> peerProfile;
+	if (!m_net.ReceiveFrame(m_serverSock, peerProfile, 4096)) return false;
+	std::string decodedProfile;
+	if (!m_crypto.DecryptMessage(peerProfile, decodedProfile) ||
+		decodedProfile.rfind(kProfilePrefix, 0) != 0) return false;
+	m_peerName = decodedProfile.substr(std::strlen(kProfilePrefix));
+	if (m_peerName.empty() || m_peerName.size() > 64) return false;
+	m_safetyNumber = m_crypto.GetSessionSafetyNumber();
 	std::cout << "[Client] Clave AES cifrada y enviada al servidor.\n";
+	std::cout << "[Client] Codigo de seguridad: " << m_safetyNumber << "\n";
+	return true;
 }
 
-// Encrypted message protocol:
-// 1. Send IV (16 bytes)
-// 2. Send encrypted message length (4 bytes, network byte order)
-// 3. Send encrypted message
-void
+// Application payloads are typed, encrypted with AES-256-GCM, then framed.
+bool
 Client::SendEncryptedMessage(const std::string& message) {
-	std::vector<unsigned char> iv;
-	auto cipher = m_crypto.AESEncrypt(message, iv);
+	if (m_serverSock == INVALID_SOCKET) return false;
+	if (message.size() > 64 * 1024) {
+		std::cerr << "[Client] El mensaje supera el limite de 64 KiB.\n";
+		return false;
+	}
+	return m_net.SendFrame(m_serverSock, m_crypto.EncryptMessage(std::string(kChatPrefix) + message));
+}
 
-	// 1) Send IV
-	m_net.SendData(m_serverSock, iv);
+bool
+Client::SendTypingNotification(bool typing) {
+	if (m_serverSock == INVALID_SOCKET) return false;
+	return m_net.SendFrame(
+		m_serverSock,
+		m_crypto.EncryptMessage(std::string(kTypingPrefix) + (typing ? "1" : "0"))
+	);
+}
 
-	// 2) Send size (uint32_t) in network byte order
-	uint32_t clen = static_cast<uint32_t>(cipher.size());
-	uint32_t nlen = htonl(clen);
-	std::vector<unsigned char> len4(reinterpret_cast<unsigned char*>(&nlen),
-		reinterpret_cast<unsigned char*>(&nlen) + 4);
-	m_net.SendData(m_serverSock, len4);
+bool
+Client::StartReceiving() {
+	if (m_serverSock == INVALID_SOCKET || m_running || m_rxThread.joinable()) return false;
+	m_running = true;
+	m_rxThread = std::thread([this]() { StartReceiveLoop(); });
+	return true;
+}
 
-	// 3) Send ciphertext
-	m_net.SendData(m_serverSock, cipher);
+void
+Client::Disconnect() {
+	m_running = false;
+	// Close before joining so a blocking recv() wakes immediately on Windows.
+	m_net.close(m_serverSock);
+	if (m_rxThread.joinable() && m_rxThread.get_id() != std::this_thread::get_id()) {
+		m_rxThread.join();
+	}
+}
+
+bool
+Client::IsConnected() const {
+	return m_serverSock != INVALID_SOCKET;
+}
+
+void
+Client::SetMessageHandler(MessageHandler handler) {
+	m_messageHandler = std::move(handler);
+}
+
+void
+Client::SetStatusHandler(StatusHandler handler) {
+	m_statusHandler = std::move(handler);
+}
+
+void
+Client::SetTypingHandler(TypingHandler handler) {
+	m_typingHandler = std::move(handler);
+}
+
+void Client::SetDisplayName(const std::string& name) {
+	if (!name.empty() && name.size() <= 64) m_displayName = name;
+}
+
+const std::string& Client::GetPeerName() const { return m_peerName; }
+const std::string& Client::GetSessionSafetyNumber() const { return m_safetyNumber; }
+
+void
+Client::NotifyStatus(const std::string& status) const {
+	if (m_statusHandler) m_statusHandler(status);
 }
 
 // Interactive message loop - Get user input, encrypt and send
@@ -85,63 +174,45 @@ Client::SendEncryptedMessage(const std::string& message) {
 void
 Client::SendEncryptedMessageLoop() {
 	std::string msg;
-	while (true) {
+	while (m_running) {
 		std::cout << "Cliente: ";
 		std::getline(std::cin, msg);
-		if (msg == "/exit") break;
-
-		std::vector<unsigned char> iv;
-		auto cipher = m_crypto.AESEncrypt(msg, iv);
-
-		m_net.SendData(m_serverSock, iv);
-
-		uint32_t clen = static_cast<uint32_t>(cipher.size());
-		uint32_t nlen = htonl(clen);
-		std::vector<unsigned char> len4(reinterpret_cast<unsigned char*>(&nlen),
-			reinterpret_cast<unsigned char*>(&nlen) + 4);
-		m_net.SendData(m_serverSock, len4);
-
-		m_net.SendData(m_serverSock, cipher);
+		if (!std::cin || msg == "/exit") break;
+		if (!SendEncryptedMessage(msg)) break;
 	}
 }
 
-// Message receiving protocol:
-// 1. Receive IV (16 bytes)
-// 2. Receive message length (4 bytes)
-// 3. Receive encrypted message
-// 4. Decrypt and display
+// Receives one authenticated frame at a time and dispatches its payload type.
 void
 Client::StartReceiveLoop() {
-	while (true) {
-		// 1) IV (16 bytes)
-		auto iv = m_net.ReceiveDataBinary(m_serverSock, 16);
-		if (iv.empty()) {
-			std::cout << "\n[Client] Conexión cerrada por el servidor.\n";
+	while (m_running) {
+		std::vector<unsigned char> packet;
+		if (!m_net.ReceiveFrame(m_serverSock, packet, 64 * 1024 + 64)) {
+			std::cout << "\n[Client] ConexiÃ³n cerrada por el servidor.\n";
 			break;
 		}
-
-		// 2) Size (4 bytes, network/big-endian)
-		auto len4 = m_net.ReceiveDataBinary(m_serverSock, 4);
-		if (len4.size() != 4) {
-			std::cout << "[Client] Error al recibir tamaño.\n";
+		std::string plain;
+		if (!m_crypto.DecryptMessage(packet, plain)) {
+			NotifyStatus("authentication_failed");
 			break;
 		}
-		uint32_t nlen = 0;
-		std::memcpy(&nlen, len4.data(), 4);
-		uint32_t clen = ntohl(nlen);
-
-		// 3) Ciphertext (clen bytes)
-		auto cipher = m_net.ReceiveDataBinary(m_serverSock, static_cast<int>(clen));
-		if (cipher.empty()) {
-			std::cout << "[Client] Error al recibir datos.\n";
+		if (plain.rfind(kTypingPrefix, 0) == 0) {
+			if (m_typingHandler) m_typingHandler(plain == std::string(kTypingPrefix) + "1");
+			continue;
+		}
+		if (plain.rfind(kChatPrefix, 0) != 0) {
+			NotifyStatus("authentication_failed");
 			break;
 		}
-
-		// 4) Decrypt and display
-		std::string plain = m_crypto.AESDecrypt(cipher, iv);
-		std::cout << "\n[Servidor]: " << plain << "\nCliente: ";
-		std::cout.flush();
+		plain.erase(0, std::strlen(kChatPrefix));
+		if (m_messageHandler) m_messageHandler(plain);
+		else {
+			std::cout << "\n[Servidor]: " << plain << "\nCliente: ";
+			std::cout.flush();
+		}
 	}
+	m_running = false;
+	NotifyStatus("connection_closed");
 	std::cout << "[Client] ReceiveLoop terminado.\n";
 }
 
@@ -149,12 +220,7 @@ Client::StartReceiveLoop() {
 // while sending messages in the main thread
 void 
 Client::StartChatLoop() {
-	std::thread recvThread([&]() {
-		StartReceiveLoop();
-		});
-
+	if (!StartReceiving()) return;
 	SendEncryptedMessageLoop();
-
-	if (recvThread.joinable())
-		recvThread.join();
+	Disconnect();
 }

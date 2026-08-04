@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files"><UniqueIdentifier>{A508E3E8-D2DE-45B6-B71C-75660C44B362}</UniqueIdentifier></Filter>
+    <Filter Include="Header Files"><UniqueIdentifier>{7628AA7C-0E20-4E72-B380-8921C1614705}</UniqueIdentifier></Filter>
+    <Filter Include="Resource Files"><UniqueIdentifier>{A272E3B2-0C18-4F1E-B28A-75E5410BB341}</UniqueIdentifier></Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\Client.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\CryptoHelper.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\DesktopApp.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\NetworkHelper.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\Server.cpp"><Filter>Source Files</Filter></ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\Client.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="include\CryptoHelper.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="include\NetworkHelper.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="include\Prerequisites.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="include\Server.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="include\resource.h"><Filter>Header Files</Filter></ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="resources\E2EE.UI.rc"><Filter>Resource Files</Filter></ResourceCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="assets\e2ee-icon.ico"><Filter>Resource Files</Filter></Image>
+    <Image Include="assets\e2ee-icon.png"><Filter>Resource Files</Filter></Image>
+  </ItemGroup>
+</Project>

@@ -15,7 +15,10 @@ runServer(int port) {
     std::cerr << "[Main] No se pudo iniciar el servidor.\n";
     return;
   }
-  s.WaitForClient(); 
+  if (!s.WaitForClient()) {
+    std::cerr << "[Main] Fallo el intercambio de claves.\n";
+    return;
+  }
   s.StartChatLoop(); 
 }
 
@@ -29,8 +32,10 @@ runClient(const std::string& ip, int port) {
   Client c(ip, port);
   if (!c.Connect()) { std::cerr << "No se pudo conectar.\n"; return; }
 
-  c.ExchangeKeys();          
-  c.SendAESKeyEncrypted();  
+  if (!c.ExchangeKeys() || !c.SendAESKeyEncrypted()) {
+    std::cerr << "[Main] Fallo el intercambio de claves.\n";
+    return;
+  }
 
   c.StartChatLoop();
 }
@@ -48,12 +53,14 @@ main(int argc, char** argv) {
   if (argc >= 2) {
     mode = argv[1];
     if (mode == "server") {
-      port = (argc >= 3) ? std::stoi(argv[2]) : 12345;
+      try { port = (argc >= 3) ? std::stoi(argv[2]) : 12345; }
+      catch (...) { std::cerr << "Puerto invalido.\n"; return 1; }
     }
     else if (mode == "client") {
       if (argc < 4) { std::cerr << "Uso: E2EE client <ip> <port>\n"; return 1; }
       ip = argv[2];
-      port = std::stoi(argv[3]);
+      try { port = std::stoi(argv[3]); }
+      catch (...) { std::cerr << "Puerto invalido.\n"; return 1; }
     }
     else {
       std::cerr << "Modo no reconocido. Usa: server | client\n";
@@ -80,6 +87,10 @@ main(int argc, char** argv) {
     }
     // Clear input buffer
     std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+  }
+  if (!std::cin || port < 1 || port > 65535) {
+    std::cerr << "El puerto debe estar entre 1 y 65535.\n";
+    return 1;
   }
   // Launch appropriate mode
   if (mode == "server") runServer(port);
